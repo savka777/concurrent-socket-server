@@ -1,6 +1,8 @@
 package Code.helpers;
 
 import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.io.PrintWriter;
 import java.net.Socket;
 import java.util.Scanner;
@@ -20,16 +22,34 @@ public class CustomerClient implements AutoCloseable {
     final int PORT = 8888;
     private final Scanner reader; // stream input from server
     private final PrintWriter writer; // stream output to server
+    private final ObjectOutputStream objectOut; // for sending objects (order object)
+    private final ObjectInputStream objectIn; // for receiving objects
 
     public CustomerClient(Customer customer) throws IOException {
         this.customer = customer;
         Socket socket = new Socket("localhost", PORT);
-        this.reader = new Scanner(socket.getInputStream());
-        this.writer = new PrintWriter(socket.getOutputStream());
-        this.writer.println(customer);
 
-        int connectionResponse = reader.nextInt(); // get response from server
-        if (connectionResponse != 1){throw new IOException();}
+        // Create object streams for serialization,  convert object to x, take x convert back to object
+        this.objectOut = new ObjectOutputStream(socket.getOutputStream());
+        this.objectIn = new ObjectInputStream(socket.getInputStream());
+
+        // Text streams for order status etc... 
+        this.reader = new Scanner(socket.getInputStream());
+        this.writer = new PrintWriter(socket.getOutputStream(), true);
+    }
+    
+    public boolean connect() {
+        try {
+            // Send customer object to server
+            objectOut.writeObject(customer);
+            objectOut.flush();
+
+            int connectionResponse = objectIn.readInt();
+            return connectionResponse == 1; // true if success, false if failure
+        } catch (Exception e) {
+            System.err.println("Connection failed: " + e.getMessage());
+            return false;
+        }
     }
 
     public void getOrderStatus() {
@@ -43,32 +63,32 @@ public class CustomerClient implements AutoCloseable {
     }
 
     public void terminateSession() {
-        try{
+        try {
             writer.println("TERMINATE");
             writer.flush();
 
             // get ack
-            if (reader.hasNextLine()){
+            if (reader.hasNextLine()) {
                 reader.nextLine(); // get response
             }
-        }catch(Exception e){
+        } catch (Exception e) {
             System.err.println("Error Terminating Session " + e.getMessage());
-        }finally{
+        } finally {
             close();
         }
     }
 
     @Override
-    public void close(){
-        try{
-            if(writer != null){
+    public void close() {
+        try {
+            if (writer != null) {
                 writer.close();
             }
 
-            if(reader != null){
+            if (reader != null) {
                 reader.close();
             }
-        }catch(Exception e){
+        } catch (Exception e) {
             System.err.println("Error closing resources: " + e.getMessage());
         }
     }

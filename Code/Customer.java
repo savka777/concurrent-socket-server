@@ -1,6 +1,7 @@
 package Code;
 
 import java.io.IOException;
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Scanner;
 
@@ -12,8 +13,9 @@ import Code.helpers.prettyPrint;
  * Client Facing Interface, User Communicates through Customer, Customer interacts with Client to send 
  * requests over to the server.
  */
-public class Customer {
-    private String name;
+public class Customer implements Serializable {
+    private static final long serialVersionUID = 1L; // unique in order to identify the serialized object
+    private String name; 
     private int id;
     private ArrayList<Order> orders;
 
@@ -24,48 +26,49 @@ public class Customer {
     }
 
     public static void main(String[] args) {
-        ArrayList<Order> orders;
+        ArrayList<Order> orders; // collect orders for this customer, send to client to send to server to process
 
-        // Get order
-        // prettyPrint.welcome();
+        // GET ORDERS
         System.out.println("Welcome, what do you want? ");
-        Scanner scanner = new Scanner(System.in);
-        String line = scanner.nextLine();
-        orders = cleanOrders(line);
-        prettyPrint.clearScreen();
+        
+        Scanner scanner = new Scanner(System.in); // take input from console
+        String line = scanner.nextLine(); // store input in string
+        orders = cleanOrders(line); // process input
 
-        // if (orders.isEmpty()) {
-        // System.out.println("I'm sorry, I did not get that, can you repeat again?");
-        // } else {
-        // System.out.println("Your orders:");
-        // for (Order o : orders){
-        // System.out.println("" + o.toString());
-        // }
-        // }
-
-        // Ask for name
-        // prettyPrint.askName();
+        // STREAM ORDERS TO SERVER:
+  
         System.out.println("What is your name? ");
         String name = scanner.nextLine();
-        // prettyPrint.clearScreen();
-        // prettyPrint.repeatOrder(name);
+        // CONFIRM ORDER HERE        
 
-        Customer customer = new Customer(name, 1, orders);
-        try (CustomerClient client = new CustomerClient(customer)) { // send to client to send to server
+        Customer customer = new Customer(name, 1, orders); // construct object to be sent to server
+        try (CustomerClient client = new CustomerClient(customer)) { // setup client, send customer 
+
+            // Problems with connection to server
+            if (!client.connect()) {
+                System.out.println("Failed to connect to cafe server. Please try again later.");
+                return;
+            }
+            System.out.println("We have placed your order, please standby, " + customer.getName()); 
+
+            // Main loop, after placing order, client interacts with barista
             while (true) {
                 System.out.println("Options:" + "|order status| " + "|collect| " + "|exit| ");
-                String command = scanner.nextLine();
 
+                String command = scanner.nextLine(); // store command
+
+                // tell client to send command over to server
                 if (command.equalsIgnoreCase("order status")) {
                     client.getOrderStatus();
                 } else if (command.equalsIgnoreCase("collect")) {
                     client.collectOrder();
                 } else if (command.equalsIgnoreCase("exit")) {
                     client.terminateSession();
+                    break; // Exit the loop
                 }
             }
         } catch (Exception e) {
-
+            System.err.println("Error communicating with cafe: " + e.getMessage());
         }
     }
 
@@ -88,7 +91,19 @@ public class Customer {
                 }
             }
         }
+        return orders;
+    }
 
+    // Getters for serialization
+    public String getName() {
+        return name;
+    }
+
+    public int getId() {
+        return id;
+    }
+
+    public ArrayList<Order> getOrders() {
         return orders;
     }
 }

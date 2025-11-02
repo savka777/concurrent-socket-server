@@ -1,6 +1,10 @@
 package Code.helpers;
 
-public class Order {
+import java.io.Serializable;
+
+// Objects of this class can be converted into bytes and later restored.
+public class Order implements Serializable {
+    private static final long serialVersionUID = 1L;
     private int quantity;
     private String type;
 

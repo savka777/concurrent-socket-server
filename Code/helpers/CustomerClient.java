@@ -5,6 +5,7 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.PrintWriter;
 import java.net.Socket;
+import java.util.ArrayList;
 import java.util.Scanner;
 
 import Code.Customer;
@@ -29,15 +30,16 @@ public class CustomerClient implements AutoCloseable {
         this.customer = customer;
         Socket socket = new Socket("localhost", PORT);
 
-        // Create object streams for serialization,  convert object to x, take x convert back to object
+        // Create object streams for serialization, convert object to x, take x convert
+        // back to object
         this.objectOut = new ObjectOutputStream(socket.getOutputStream());
         this.objectIn = new ObjectInputStream(socket.getInputStream());
 
-        // Text streams for order status etc... 
+        // Text streams for order status etc...
         this.reader = new Scanner(socket.getInputStream());
         this.writer = new PrintWriter(socket.getOutputStream(), true);
     }
-    
+
     public boolean connect() {
         try {
             // Send customer object to server
@@ -53,12 +55,27 @@ public class CustomerClient implements AutoCloseable {
     }
 
     public void getOrderStatus() {
-        // TODO Auto-generated method stub
-        throw new UnsupportedOperationException("Unimplemented method 'getOrderStatus'");
+        try{
+            writer.println("ORDER_STATUS"); // send request to server, ask for order status
+            writer.flush();
+
+            String ack = reader.nextLine();
+            if (ack.equalsIgnoreCase("ACK")) {
+                System.out.println("Server got the ORDER STATUS REQUEST, recieving status now....");
+                String status = reader.nextLine(); // get order message
+                System.out.println(status); // print
+            }else{
+                /////////////
+            }
+        }catch(Exception e){
+            System.err.println(e.getMessage());
+        }
+    
     }
 
     public void collectOrder() {
         // TODO Auto-generated method stub
+        // why do we need to collect orders???
         throw new UnsupportedOperationException("Unimplemented method 'collectOrder'");
     }
 

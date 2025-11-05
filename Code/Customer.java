@@ -46,14 +46,14 @@ public class Customer implements Serializable {
 
             // Problems with connection to server
             if (!client.connect()) {
-                System.out.println("Failed to connect to cafe server. Please try again later.");
+                System.err.println("Failed to connect to cafe server. Please try again later.");
                 return;
             }
-            System.out.println("We have placed your order, please standby, " + customer.getName()); 
+            System.err.println("We have placed your order, please standby, " + customer.getName()); 
 
             // Main loop, after placing order, client interacts with barista
             while (true) {
-                System.out.println("Options:" + "|order status| " + "|collect| " + "|exit| ");
+                System.err.println("Options:" + "|order status| " + "|collect| " + "|exit| ");
 
                 String command = scanner.nextLine(); // store command
 
@@ -61,9 +61,9 @@ public class Customer implements Serializable {
                 if (command.equalsIgnoreCase("order status")) {
                     client.getOrderStatus();
                 } else if (command.equalsIgnoreCase("collect")) {
-                    client.collectOrder();
+                    client.collectOrder(); // to do
                 } else if (command.equalsIgnoreCase("exit")) {
-                    client.terminateSession();
+                    client.terminateSession(); // done
                     break; // Exit the loop
                 }
             }
@@ -94,7 +94,6 @@ public class Customer implements Serializable {
         return orders;
     }
 
-    // Getters for serialization
     public String getName() {
         return name;
     }

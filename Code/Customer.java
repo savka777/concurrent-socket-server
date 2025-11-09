@@ -53,7 +53,7 @@ public class Customer implements Serializable {
 
             // Main loop, after placing order, client interacts with barista
             while (true) {
-                System.err.println("Options:" + "|order status| " + "|collect| " + "|exit| ");
+                System.err.println("Options:" + "--|order status|-- " + "--|collect| " + "--|exit|-- ");
 
                 String command = scanner.nextLine(); // store command
 

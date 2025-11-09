@@ -23,19 +23,18 @@ public class CustomerClient implements AutoCloseable {
     final int PORT = 8888;
     private final Scanner reader; // stream input from server
     private final PrintWriter writer; // stream output to server
+
+    /// MIGHT NEED TO CHANGE, THEY USE THE SAME STREAM
+
     private final ObjectOutputStream objectOut; // for sending objects (order object)
-    private final ObjectInputStream objectIn; // for receiving objects
 
     public CustomerClient(Customer customer) throws IOException {
         this.customer = customer;
         Socket socket = new Socket("localhost", PORT);
 
-        // Create object streams for serialization, convert object to x, take x convert
-        // back to object
+        // VERY FRAGILE, could do better but lazy for now (they share the same stream
+        // which = problematic)
         this.objectOut = new ObjectOutputStream(socket.getOutputStream());
-        this.objectIn = new ObjectInputStream(socket.getInputStream());
-
-        // Text streams for order status etc...
         this.reader = new Scanner(socket.getInputStream());
         this.writer = new PrintWriter(socket.getOutputStream(), true);
     }
@@ -46,8 +45,13 @@ public class CustomerClient implements AutoCloseable {
             objectOut.writeObject(customer);
             objectOut.flush();
 
-            int connectionResponse = objectIn.readInt();
-            return connectionResponse == 1; // true if success, false if failure
+            // int connectionResponse = objectIn.readInt();
+            String response = reader.nextLine();
+            if (response.equalsIgnoreCase("CONNECTED")) {
+                return true;
+            }
+            return false;
+            // return connectionResponse == 1; // true if success, false if failure
         } catch (Exception e) {
             System.err.println("Connection failed: " + e.getMessage());
             return false;
@@ -55,41 +59,61 @@ public class CustomerClient implements AutoCloseable {
     }
 
     public void getOrderStatus() {
-        try{
+        try {
             writer.println("ORDER_STATUS"); // send request to server, ask for order status
             writer.flush();
 
-            String ack = reader.nextLine();
-            if (ack.equalsIgnoreCase("ACK")) {
+            String response = reader.nextLine();
+            if (response.equalsIgnoreCase("ORDER_STATUS_CONFIRMED")) {
                 System.out.println("Server got the ORDER STATUS REQUEST, recieving status now....");
                 String status = reader.nextLine(); // get order message
                 System.out.println(status); // print
-            }else{
-                /////////////
+            } else {
+                System.err.println("Servor ERROR, proccessing request");
             }
-        }catch(Exception e){
+        } catch (Exception e) {
             System.err.println(e.getMessage());
         }
-    
+
     }
 
     public void collectOrder() {
-        // TODO Auto-generated method stub
-        // why do we need to collect orders???
-        throw new UnsupportedOperationException("Unimplemented method 'collectOrder'");
+        try {
+            writer.println("COLLECT_ORDER");
+            writer.flush();
+
+            String response = reader.nextLine();
+            if (response.equalsIgnoreCase("COLLECT_ORDER_READY")) {
+                System.out.println("Server got the COLLECT ORDER REQUEST");
+                System.out.println("Thank you and have a nice day:)");
+                terminateSession();
+            } else if (response.equalsIgnoreCase("COLLECT_ORDER_NOT_READY")) {
+                System.out.println("ORDER IS NOT READY FOR COLLECTION");
+            }
+        } catch (Exception e) {
+            System.err.println(e.getMessage());
+        }
     }
 
     public void terminateSession() {
         try {
             writer.println("TERMINATE");
             writer.flush();
-
-            // get ack
+            
+            // Confimation on our end
             if (reader.hasNextLine()) {
-                reader.nextLine(); // get response
+                String response = reader.nextLine().trim();
+                if (response.equalsIgnoreCase("TERMINATE_CONFIRMED")) {
+                    System.out.println("Server confirmed session termination.");
+                } else {
+                    System.err.println("Unexpected response during termination: " + response);
+                }
+            } else {
+                System.err.println("No response from server during termination.");
             }
+
         } catch (Exception e) {
-            System.err.println("Error Terminating Session " + e.getMessage());
+            System.err.println("Error terminating session: " + e.getMessage());
         } finally {
             close();
         }

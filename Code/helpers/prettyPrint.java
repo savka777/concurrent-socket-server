@@ -1,70 +1,48 @@
 package Code.helpers;
 
-import java.util.Scanner;
-
 public class prettyPrint {
 
-    public static void welcome(){
-              System.out.println("     ________________________");
-      System.out.println("    /                        \\");
-      System.out.println("   | Hello Welcome to         |");
-      System.out.println("   | Starbucks, what can I    |");
-      System.out.println("   | get you?                 |");
-      System.out.println("    \\________________________/");
-      System.out.println("              |");
-      System.out.println("              |");
-      System.out.println("         .-\"\"\"\"-.");
-      System.out.println("        /        \\");
-      System.out.println("       |  ^    ^  |");
-      System.out.println("       |     <    |");
-      System.out.println("       |   \\___/  |");
-      System.out.println("        \\        /");
-      System.out.println("         '------'");
-      System.out.println();
-      
-    }
+  private static final String RESET = "\u001B[0m";
+  private static final String BOLD = "\u001B[1m";
+  private static final String CYAN = "\u001B[36m";
+  private static final String GREEN = "\u001B[32m";
+  private static final String YELLOW = "\u001B[33m";
 
-    public static void askName(){
-        System.out.println("     ________________________");
-        System.out.println("    /                        \\");
-        System.out.println("   | Great! What's your name  |");
-        System.out.println("   | so I can get this order  |");
-        System.out.println("   | started for you?         |");
-        System.out.println("    \\________________________/");
-        System.out.println("              |");
-        System.out.println("              |");
-        System.out.println("         .-\"\"\"\"-.");
-        System.out.println("        /        \\");
-        System.out.println("       |  ^    ^  |");
-        System.out.println("       |     <    |");
-        System.out.println("       |   \\___/  |");
-        System.out.println("        \\        /");
-        System.out.println("         '------'");
-        System.out.println();
+  public static String welcomeBanner() {
+    return """
 
-    }
+             (  )   (   )  )
+              ) (   )  (  (
+              ( )  (    ) )
+              _____________
+             <_____________> ___
+             |             |/ _ \\
+             |               | | |
+             |               |_| |
+          ___|             |\\___/
+         /    \\___________/    \\
+         \\_____________________/
 
-    public static void repeatOrder(String name){
-        System.out.println("     ________________________");
-        System.out.println("    /                        \\");
-        System.out.println("   | Thanks " + name + "! Can I    |");
-        System.out.println("   | get you anything else?   |");
-        System.out.println("    \\________________________/");
-        System.out.println("              |");
-        System.out.println("              |");
-        System.out.println("         .-\"\"\"\"-.");
-        System.out.println("        /        \\");
-        System.out.println("       |  ^    ^  |");
-        System.out.println("       |     <    |");
-        System.out.println("       |   \\___/  |");
-        System.out.println("        \\        /");
-        System.out.println("         '------'");
-        System.out.println();
-
-    }
-
-      public static void clearScreen() {
-      System.out.print("\033[2J\033[H");
-      System.out.flush();
+         YO! Welcome to Coffee House
+        """;
   }
+
+  public static void printWelcome() {
+    System.out.println(welcomeBanner());
+  }
+
+  public static void clearScreen() {
+    System.out.print("\033[2J\033[H");
+    System.out.flush();
+  }
+
+  public static void printOptionsMenu() {
+    System.out.println(
+        BOLD + "Options: " + RESET +
+            CYAN + "[ order status ]" + RESET + "  " +
+            GREEN + "[ collect ]" + RESET + "  " +
+            YELLOW + "[ exit ]" + RESET);
+  }
+
+  
 }

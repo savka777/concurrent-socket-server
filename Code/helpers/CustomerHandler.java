@@ -1,52 +1,57 @@
 package Code.helpers;
 
-import java.io.PrintWriter;
 import java.io.IOException;
 import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.net.Socket;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Scanner;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import Code.Customer;
-import Code.helpers.Order;
 
 /**
- * Handles communication between the server and a single connected client.
+ * Handles all communication between the server and a SINGLE connected customer.
  * <p>
- * Each {@code CustomerHandler} instance runs on its own thread, maintaining an
- * active session with one customer. It processes all client requests
- * (e.g., placing orders, checking status, collecting orders) until the customer
- * disconnects or the session is terminated.
+ * Each {@code CustomerHandler} runs on its own thread:
+ * <ul>
+ * <li>Receives the {@link Customer} object when connected</li>
+ * <li>Enqueues the customers orders into the waiting area</li>
+ * <li>Listens for commands such as ORDER_STATUS, NEW_ORDER, COLLECT_ORDER,
+ * TERMINATE</li>
+ * <li>Responds to commands via {@link ObjectOutputStream}</li>
+ * <li>Sends async notifications</li>
+ * </ul>
+ *
+ * <p>
+ * <b>Protocol:</b> ALL messages are sent via object streams.
  */
 public class CustomerHandler implements Runnable {
-    private final Socket clientSocket; // Standard socket for communication
-    private final Scanner reader; // reader to stream input from client
-    private final PrintWriter writer; // writer to stream output to client
-    private final ObjectInputStream objectIn; // objectIn to stream objects from client
 
-    private final BlockingQueue<String> waitingArea; // Thread-Safe Queue, following FIFO principles, use internal
-                                                     // synchronization to coordinate threads
-    private final ConcurrentHashMap<String, String> brewingArea; // Thread-Safe Hashmap, Key: Order String, Value :
-                                                                 // Customer ID (NOT YET IMPLEMENTED)
-    private final BlockingQueue<String> trayArea; // Thread-Safe Queue, tray area represents order's that have been
-                                                  // fulfilled are waiting to be collected
+    // Passivae socket, I/O object streams
+    private final Socket clientSocket;
+    private final ObjectInputStream objectIn;
+    private final ObjectOutputStream objectOut;
 
-    private final AtomicInteger connectedClients; // Client counter, used for the server to keep track of how many
-                                                  // clients are connected
-    private final ConcurrentHashMap<Integer, Boolean> activeCustomers; // Track active customer IDs
-    private final ConcurrentHashMap<Integer, String> idleCustomers; // Track idle customer IDs
+    // Shared Concurrent data structures
+    private final BlockingQueue<OrderTicket> waitingArea;
+    private final ConcurrentHashMap<String, String> brewingArea;
+    private final BlockingQueue<OrderTicket> trayArea;
+    private final ConcurrentHashMap<Integer, Boolean> activeCustomers;
+    private final ConcurrentHashMap<Integer, String> idleCustomers;
 
-    private ArrayList<Order> customerOrders; // Keep's track of the order placed by the customer
+    // Shared Mutex counter for connect clients
+    private final AtomicInteger connectedClients;
+
+    // Domain specific fields
+    private ArrayList<Order> customerOrders;
     private String customerName;
     private int customerId;
-    private boolean isIdle; 
-
-    private boolean isActive; // Check if client session is still active
+    private boolean isIdle;
+    private boolean isActive;
 
     /**
      * Constructs a new {@code CustomerHandler} for managing communication with a
@@ -63,16 +68,16 @@ public class CustomerHandler implements Runnable {
      * @throws IOException
      */
     public CustomerHandler(Socket clientSocket,
-            LinkedBlockingQueue<String> waitingArea,
+            LinkedBlockingQueue<OrderTicket> waitingArea,
             ConcurrentHashMap<String, String> brewArea,
-            LinkedBlockingQueue<String> trayArea,
+            LinkedBlockingQueue<OrderTicket> trayArea,
             AtomicInteger connectedClients,
             ConcurrentHashMap<Integer, Boolean> activeCustomers,
             ConcurrentHashMap<Integer, String> idleCustomers) throws IOException {
         this.clientSocket = clientSocket;
+        this.objectOut = new ObjectOutputStream(clientSocket.getOutputStream());
+        this.objectOut.flush();
         this.objectIn = new ObjectInputStream(clientSocket.getInputStream());
-        this.reader = new Scanner(clientSocket.getInputStream());
-        this.writer = new PrintWriter(clientSocket.getOutputStream(), true);
         this.waitingArea = waitingArea;
         this.brewingArea = brewArea;
         this.trayArea = trayArea;
@@ -84,12 +89,10 @@ public class CustomerHandler implements Runnable {
     }
 
     /**
-     * Entry point for the CustomerHandler thread.
+     * The Thread's entry point.
      * <p>
-     * Continuously manages communication with a SINGLE connected customer.
-     * Establishes initial connection, processes client requests in a loop
-     * until the session ends or the thread is interrupted, and then performs
-     * cleanup.
+     * Connects the customer, then loop reading and handling commands
+     * until the session ends or the thread is interrupted.
      */
     @Override
     public void run() {
@@ -106,44 +109,52 @@ public class CustomerHandler implements Runnable {
     }
 
     /**
-     * Establishes the initial connection with a newly connected customer.
+     * Reads the {@link Customer} object from the client and registers
+     * their orders to the waiting area.
      * <p>
-     * Receives the {@link Customer} object sent from the client, extracts
-     * identification and order details, and places each order into the shared
-     * waiting area queue for processing by the scheduler.
-     * <p>
-     * Sends a confirmation signal back to the client (1 for success, 0 for failure)
-     * to acknowledge the connection status.
+     * Also checks for abandoned orders in the tray that match this customer’s
+     * request,
+     * and reassign them if found.
      */
     private void connectCustomer() {
         try {
-            Customer customer = (Customer) objectIn.readObject(); // change
+            Customer customer = (Customer) objectIn.readObject();
 
             this.customerName = customer.getName();
             this.customerId = customer.getId();
             this.customerOrders = customer.getOrders();
             System.out.println("Customer connected: " + customerName + " (ID: " + customerId + ")");
 
-            // Register this customer as active
             activeCustomers.put(customerId, true);
+
+            boolean hasAbandonedOrder = false;
 
             for (Order order : customer.getOrders()) {
                 String orderItem = customerId + ":" + order.toString();
 
-                // Check for abandoned orders of the same type
-                String abandonedOrder = findAbandonedOrder(order.toString());
+                String abandonedOrder = findAbandonedOrder(order.toString(), false);
                 if (abandonedOrder != null) {
                     System.out.println("Found abandoned order, giving it to: " + getCustomerName());
+                    hasAbandonedOrder = true;
                     continue;
                 }
 
-                // No existing order found, add to waiting area
-                waitingArea.offer(orderItem);
+                OrderTicket ticket = new OrderTicket(customerId, orderItem, this);
+                waitingArea.offer(ticket);
                 System.out.println("Added " + customer.getName() + " order to waiting area: " + orderItem);
             }
 
-            writer.println("CONNECTED");
-            writer.flush();
+            objectOut.writeObject("CONNECTED");
+            objectOut.flush();
+
+            if (hasAbandonedOrder) {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                sendNotification("That was fast! We have your order complete :)");
+            }
 
         } catch (Exception e) {
             System.err.println("Error connecting customer: " + e.getMessage());
@@ -162,64 +173,93 @@ public class CustomerHandler implements Runnable {
      */
     private void handleCustomerRequest() {
         try {
-            if (reader.hasNextLine()) {
-                String request = reader.nextLine().trim();
+            Object requestObj = objectIn.readObject();
+            if (requestObj instanceof String) {
+                String request = ((String) requestObj).trim();
                 System.out.println(request + " from client: " + customerName);
 
                 if (request.equalsIgnoreCase("TERMINATE")) {
-                    writer.println("TERMINATE_CONFIRMED");
-                    writer.flush();
+                    objectOut.writeObject("TERMINATE_CONFIRMED");
+                    objectOut.flush();
                     isActive = false;
                 } else if (request.equalsIgnoreCase("ORDER_STATUS")) {
-                    writer.println("ORDER_STATUS_CONFIRMED");
-                    writer.flush();
+                    objectOut.writeObject("ORDER_STATUS_CONFIRMED");
+                    objectOut.flush();
                     if (isIdle) {
-                        writer.println("No order found for " + customerName + " - customer is idle");
+                        objectOut.writeObject("No order found for " + customerName + " - customer is idle");
+                        objectOut.flush();
                     } else {
                         returnOrderStatus();
                     }
                 } else if (request.equalsIgnoreCase("COLLECT_ORDER")) {
                     if (isIdle) {
-                        writer.println("NO_ORDER_FOUND");
-                        writer.flush();
+                        objectOut.writeObject("NO_ORDER_FOUND");
+                        objectOut.flush();
                     } else {
-                        // check if order can be collected
                         boolean isReady = true;
                         for (Order order : customerOrders) {
                             String orderStr = customerId + ":" + order.toString();
-                            if (!trayArea.contains(orderStr)) {
+                            boolean found = trayArea.stream().anyMatch(ticket -> ticket.orderStr().equals(orderStr));
+                            if (!found) {
                                 isReady = false;
-                                break; // no need to check further if any order is not ready
+                                break;
                             }
                         }
 
                         if (isReady) {
-                            // Only remove orders if ALL are ready
                             for (Order order : customerOrders) {
                                 String orderStr = customerId + ":" + order.toString();
-                                trayArea.remove(orderStr);
+                                trayArea.removeIf(ticket -> ticket.orderStr().equals(orderStr));
                             }
-                            writer.println("COLLECT_ORDER_READY");
-                            writer.flush(); // Flush immediately so client gets the response
-                            isIdle = true; // Mark customer as idle after collection
-                            idleCustomers.put(customerId, customerName); // Add to idle customers list
-                            System.out.println("Customer " + customerName + " has collected their order and is now idle");
+                            objectOut.writeObject("COLLECT_ORDER_READY");
+                            objectOut.flush();
+                            isIdle = true;
+                            idleCustomers.put(customerId, customerName);
+                            System.out
+                                    .println("Customer " + customerName + " has collected their order and is now idle");
                         } else {
-                            writer.println("COLLECT_ORDER_NOT_READY");
-                            writer.flush(); // Flush immediately so client gets the response
+                            objectOut.writeObject("COLLECT_ORDER_NOT_READY");
+                            objectOut.flush();
                         }
                     }
+                } else if (request.equalsIgnoreCase("NEW_ORDER")) {
+                    objectOut.writeObject("NEW_ORDER_READY");
+                    objectOut.flush();
+
+                    Object ordersObj = objectIn.readObject();
+                    if (ordersObj instanceof ArrayList<?>) {
+                        @SuppressWarnings("unchecked")
+                        ArrayList<Order> newOrders = (ArrayList<Order>) ordersObj;
+
+                        customerOrders.addAll(newOrders);
+                        for (Order order : newOrders) {
+                            String orderItem = customerId + ":" + order.toString();
+
+                            String abandonedOrder = findAbandonedOrder(order.toString(), true);
+                            if (abandonedOrder != null) {
+                                System.out.println(
+                                        "Found abandoned order for new request, giving it to: " + getCustomerName());
+                                continue;
+                            }
+
+                            OrderTicket ticket = new OrderTicket(customerId, orderItem, this);
+                            waitingArea.offer(ticket);
+                            System.out.println("Added new order for " + customerName + ": " + orderItem);
+                        }
+
+                        isIdle = false;
+                        idleCustomers.remove(customerId);
+
+                        objectOut.writeObject("NEW_ORDER_CONFIRMED");
+                        objectOut.flush();
+                    }
                 }
-            } else {
-                // Small delay to prevent busy waiting when no input
-                Thread.sleep(100);
             }
         } catch (Exception e) {
             System.err.println("Error handling request: " + e.getMessage());
             isActive = false;
         }
     }
-
 
     /**
      * Builds and sends a summary of the customer's order status.
@@ -233,50 +273,108 @@ public class CustomerHandler implements Runnable {
         for (Order order : customerOrders) {
             String orderStr = customerId + ":" + order.toString();
 
-            if (waitingArea.contains(orderStr)) {
-                sb.append(getCustomerName())
+            if (isInWaitingArea(orderStr)) {
+                sb.append(customerName)
                         .append("'s order \"")
-                        .append(order.toString())
+                        .append(order)
                         .append("\" is currently in the WAITING area. Last checked: ")
                         .append(LocalDateTime.now())
-                        .append(System.lineSeparator());
+                        .append("\n");
+
             } else if (brewingArea.containsKey(orderStr)) {
-                sb.append(getCustomerName())
+                sb.append(customerName)
                         .append("'s order \"")
-                        .append(order.toString())
+                        .append(order)
                         .append("\" is being BREWED. Last checked: ")
                         .append(LocalDateTime.now())
-                        .append(System.lineSeparator());
-            } else if (trayArea.contains(orderStr)) {
-                sb.append(getCustomerName())
+                        .append("\n");
+
+            } else if (isInTrayArea(orderStr)) {
+                sb.append(customerName)
                         .append("'s order \"")
-                        .append(order.toString())
+                        .append(order)
                         .append("\" is READY for collection. Last checked: ")
                         .append(LocalDateTime.now())
-                        .append(System.lineSeparator());
+                        .append("\n");
+
             } else {
                 sb.append("Order \"")
-                        .append(order.toString())
-                        .append("\" not found in any area : possible tracking error.")
-                        .append(System.lineSeparator());
+                        .append(order)
+                        .append("\" not found in any area : possible tracking error.\n");
             }
         }
 
-        writer.println(sb.toString());
-        writer.flush();
+        try {
+            objectOut.writeObject(sb.toString());
+            objectOut.flush();
+        } catch (IOException e) {
+            System.err.println("Error sending order status: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Check for abandoned orders in tray area that match the requested order type
+     * 
+     * @param orderType the order to look for
+     * @return orderItem string if found and reassigned, null otherwise
+     */
+    private String findAbandonedOrder(String orderType, boolean sendNotification) {
+        for (OrderTicket ticket : trayArea) {
+            if (ticket.orderStr().contains(":")) {
+                String[] parts = ticket.orderStr().split(":", 2);
+                try {
+                    int originalCustomerId = Integer.parseInt(parts[0]);
+                    String order = parts[1];
+
+                    if (!activeCustomers.containsKey(originalCustomerId) && order.equals(orderType)) {
+                        if (trayArea.remove(ticket)) {
+                            String newOrderItem = customerId + ":" + order;
+                            OrderTicket newTicket = new OrderTicket(customerId, newOrderItem, this);
+                            trayArea.offer(newTicket);
+                            System.out.println("Reassigning abandoned order '" + order + "' from customer "
+                                    + originalCustomerId + " to customer " + customerId);
+
+                            if (sendNotification) {
+                                sendNotification("That was fast! We have your order complete :)");
+                            }
+                            return order;
+                        }
+                    }
+                } catch (NumberFormatException e) {
+                    continue;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Sends an asynchronous notification to the client.
+     * <p>
+     * Notifications are prefixed with the {@code NOTE: } so the client listener
+     * can tell them apart from normal command responses.
+     *
+     * @param text notification text to send
+     */
+    public synchronized void sendNotification(String text) {
+        try {
+            objectOut.writeObject("SERVER: " + text);
+            objectOut.flush();
+        } catch (IOException e) {
+            System.err.println("Failed to send notification to " + customerName + ": " + e.getMessage());
+        }
     }
 
     private void cleanup() {
         try {
-            if (writer != null)
-                writer.close();
-            if (reader != null)
-                reader.close();
+            if (objectOut != null)
+                objectOut.close();
+            if (objectIn != null)
+                objectIn.close();
             if (clientSocket != null && !clientSocket.isClosed()) {
                 clientSocket.close();
             }
-            connectedClients.decrementAndGet(); // Client disconnected
-            // Remove customer from active and idle lists when disconnecting
+            connectedClients.decrementAndGet();
             if (customerId != 0) {
                 activeCustomers.remove(customerId);
                 idleCustomers.remove(customerId);
@@ -290,50 +388,32 @@ public class CustomerHandler implements Runnable {
         }
     }
 
-    /**
-     * Check for abandoned orders in tray area that match the requested order type
-     * 
-     * @param orderType the order to look for
-     * @return orderItem string if found and reassigned, null otherwise
-     */
-    private String findAbandonedOrder(String orderType) {
-        for (String orderItem : trayArea) {
-            if (orderItem.contains(":")) {
-                String[] parts = orderItem.split(":", 2);
-                try {
-                    int originalCustomerId = Integer.parseInt(parts[0]);
-                    String order = parts[1];
-
-                    // Check if original customer is still active and if order matches
-                    if (!activeCustomers.containsKey(originalCustomerId) && order.equals(orderType)) {
-                        // Remove the abandoned order and reassign it
-                        if (trayArea.remove(orderItem)) {
-                            // Put it back in tray with new customer ID
-                            String newOrderItem = customerId + ":" + order;
-                            trayArea.offer(newOrderItem);
-                            System.out.println("Reassigning abandoned order '" + order + "' from customer "
-                                    + originalCustomerId + " to customer " + customerId);
-                            return order; // Return the order part only
-                        }
-                    }
-                } catch (NumberFormatException e) {
-                    continue;
-                }
+    /** Helper: Returns true if a matching ticket is in waiting area. */
+    private boolean isInWaitingArea(String orderStr) {
+        for (OrderTicket t : waitingArea) {
+            if (t.orderStr().equals(orderStr)) {
+                return true;
             }
         }
-        return null;
+        return false;
     }
 
-    /**
-     * @return
-     */
+    /** Helper: Returns true if a matching ticket is in tray area. */
+    private boolean isInTrayArea(String orderStr) {
+        for (OrderTicket t : trayArea) {
+            if (t.orderStr().equals(orderStr)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Get customer name */
     public String getCustomerName() {
         return customerName;
     }
 
-    /**
-     * @return
-     */
+    /** Get customer ID */
     public int getCustomerId() {
         return customerId;
     }

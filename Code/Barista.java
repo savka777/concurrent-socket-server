@@ -11,65 +11,52 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import Code.helpers.CustomerHandler;
+import Code.helpers.OrderTicket;
 
-// Server Implementation
 public class Barista {
-    private final static int PORT = 8888; // server port, any client can connect that is communicating on this port
-    // thread pool that handles client connections, at most letting in 10 clients at
-    // a time into the coffee shop, when someone leaves a thread is freed for any
-    // waiting clients
-    // uses a blocking queue, each thread, fetches next task and executes it
-    private final ExecutorService clientHandlers = Executors.newFixedThreadPool(10);
-    // thread pool for barista workers, can handle up to 4 workers (2 tea + 2 coffee
-    // max)
-    private final ExecutorService baristaWorkers = Executors.newFixedThreadPool(4);
+    private final static int PORT = 8888;
 
-    // smart scheduler thread that assigns work based on capacity
+    // Threads
+    private final ExecutorService clientHandlers = Executors.newFixedThreadPool(10);
+    private final ExecutorService baristaWorkers = Executors.newFixedThreadPool(4);
     private final Thread orderScheduler;
 
-    // conccurent data structures, only block certain parts of the data structure
-    // when a worker is using it.
-    private final LinkedBlockingQueue<String> waitingArea = new LinkedBlockingQueue<>(); // client places order ->
-                                                                                         // waiting area -> free barista
-                                                                                         // picks up order
-    private final ConcurrentHashMap<String, String> brewArea = new ConcurrentHashMap<>(); // barista picks up order ->
-                                                                                          // order is in brew area
-    private final LinkedBlockingQueue<String> trayArea = new LinkedBlockingQueue<>(); // barista completes tasks ->
-                                                                                      // order gets placed in tray area
+    // Concurrent Data Structures
+    private final LinkedBlockingQueue<OrderTicket> waitingArea = new LinkedBlockingQueue<>();
+    private final ConcurrentHashMap<String, String> brewArea = new ConcurrentHashMap<>();
+    private final LinkedBlockingQueue<OrderTicket> trayArea = new LinkedBlockingQueue<>();
+    private final ConcurrentHashMap<Integer, Boolean> activeCustomers = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, String> idleCustomers = new ConcurrentHashMap<>();
 
-    // tracking variables for cafe stats
-    // volatile, because changes made in one thread, affect all other threads
-    // read by all threads, but writin only once in timer thread (which calls check
-    // stats)
-    // Sufficient since only 1 thread updates these, no need for atomic objects
+    // Snapshots counts consistant across all threads
     private volatile int ordersInWaiting;
     private volatile int ordersInBrew;
     private volatile int orderInTray;
 
-    // capacity counters for tea and coffee, read and mofified by all threads
+    // Mutex variables, thread safe updates across
     private final AtomicInteger countTeaBrewing = new AtomicInteger(0);
     private final AtomicInteger countCoffeeBrewing = new AtomicInteger(0);
-
-    // track connected clients
     private final AtomicInteger connectedClients = new AtomicInteger(0);
 
-    // track active customer IDs to detect abandoned orders
-    // When a user leaves without picking up their order, we will give it to a new
-    // client
-    private final ConcurrentHashMap<Integer, Boolean> activeCustomers = new ConcurrentHashMap<>();
-    
-    // track idle customers (customers who have collected their orders)
-    private final ConcurrentHashMap<Integer, String> idleCustomers = new ConcurrentHashMap<>();
-
-
-    // shutdown flag for scheduler
     private volatile boolean isShuttingDown = false;
 
+    /**
+     * Main server class.
+     * <p>
+     * {@code Barista} is responsible for:
+     * <ul>
+     * <li>Accepting incoming client connections</li>
+     * <li>Creating a {@link CustomerHandler} for each connected customer</li>
+     * <li>Scheduling and brewing orders using scheduler and worker threads</li>
+     * <li>Moving orders from WAITING → BREWING → TRAY areas</li>
+     * <li>Sending async notifications to customers when orders are ready</li>
+     * <li>Displaying live stats to the terminal</li>
+     * </ul>
+     *
+     */
     public Barista() {
-        // Initialize the smart scheduler, responsible for order retrieval, type
-        // detection, capacity check, order assignment,
-        this.orderScheduler = new Thread(this::runOrderScheduler); // redirector, instance method
-        this.orderScheduler.setDaemon(true); // when cafe closes we stop service
+        this.orderScheduler = new Thread(this::runOrderScheduler);
+        this.orderScheduler.setDaemon(true);
         this.orderScheduler.start();
     }
 
@@ -80,18 +67,18 @@ public class Barista {
             cafe.shutdown();
         }));
 
-        Timer timer = new Timer(); // print stats every x seconds
+        Timer timer = new Timer();
         timer.scheduleAtFixedRate(new TimerTask() {
             public void run() {
                 cafe.printStats();
             }
-        }, 0, 1000); // Update every 1 second instead of 5
+        }, 0, 1000);
 
-        cafe.runServer(); // as soon as server stops running, orderScheduler is done (daemon thread)
+        cafe.runServer();
     }
 
     private void runServer() {
-        ServerSocket serverSocket = null; // Standard socket to allow clients to connect
+        ServerSocket serverSocket = null;
         try {
             serverSocket = new ServerSocket(PORT);
             System.out.println("Cafe is Open!");
@@ -100,7 +87,6 @@ public class Barista {
                 Socket clientSocket = serverSocket.accept();
                 System.out.println("New Customer Connected: " + clientSocket.getRemoteSocketAddress());
 
-                // Create CustomerHandler and submit to thread pool
                 try {
                     CustomerHandler handler = new CustomerHandler(
                             clientSocket,
@@ -109,9 +95,9 @@ public class Barista {
                             trayArea,
                             connectedClients,
                             activeCustomers,
-                            idleCustomers); // Pass both customer trackers
+                            idleCustomers);
 
-                    connectedClients.incrementAndGet(); // Client connected
+                    connectedClients.incrementAndGet();
                     clientHandlers.submit(handler);
 
                 } catch (IOException e) {
@@ -137,35 +123,36 @@ public class Barista {
     public void printStats() {
         checkStats();
 
-        // Save cursor position, move to top, print status, restore cursor
-        System.out.print("\033[s"); // Save cursor position
-        System.out.print("\033[H"); // Move to top-left
-        System.out.print("\033[K"); // Clear current line
-
-        // Print compact status bar
-        System.out.printf("CAFE STATUS | Clients: %d | Idle: %d | Waiting: %d | Brewing: %d (T:%d C:%d) | Tray: %d | Port: %d%n",
+        System.out.print("\033[s");
+        System.out.print("\033[H");
+        System.out.print("\033[K");
+        System.out.printf(
+                "CAFE STATUS | Clients: %d | Idle: %d | Waiting: %d | Brewing: %d (T:%d C:%d) | Tray: %d | Port: %d%n",
                 connectedClients.get(), idleCustomers.size(), ordersInWaiting, ordersInBrew,
                 countTeaBrewing.get(), countCoffeeBrewing.get(), orderInTray, PORT);
 
-        System.out.print("─".repeat(80)); // Separator line
-        System.out.print("\033[u"); // Restore cursor position
+        System.out.print("─".repeat(80));
+        System.out.print("\033[u");
     }
 
+    /**
+     * Scheduler loop that takes orders from the waiting area.
+     * <p>
+     * Continuously takes the next {@link OrderTicket} from {@code waitingArea}.
+     * If the brewing capacity allows it, submits work to {@code baristaWorkers}.
+     * Otherwise, re queue the ticket and wait.
+     */
     private void runOrderScheduler() {
         while (!isShuttingDown) {
             try {
-                String order = waitingArea.take(); // Take next order, if empty (no order) WAIT until someone adds
-                                                   // order, do nothing if no work, efficient because wasted cpu cycles
-                                                   // checking
-                String type = getOrderType(order);
+                OrderTicket ticket = waitingArea.take();
+                String type = getOrderType(ticket.orderStr());
 
-                // Check if we can brew this type (checks capacity)
                 if (canBrew(type)) {
-                    baristaWorkers.submit(() -> brewOrder(order, type));
+                    baristaWorkers.submit(() -> brewOrder(ticket, type));
                 } else {
-                    // Put back and try again later
-                    waitingArea.offer(order);
-                    Thread.sleep(100); // Brief pause to prevent busy waiting
+                    waitingArea.offer(ticket);
+                    Thread.sleep(100);
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -174,13 +161,27 @@ public class Barista {
         }
     }
 
+    /**
+     * Helper: Extracts the order type ("tea", "coffee") from an order string.
+     *
+     * @param order order string
+     * @return order type
+     */
     private String getOrderType(String order) {
-        // Extract order part after customerId (format: "customerId:orderItem")
         String orderItem = order.contains(":") ? order.substring(order.indexOf(":") + 1) : order;
         String[] parts = orderItem.split(" ");
         return parts.length > 1 ? parts[1].toLowerCase() : "";
     }
 
+    /**
+     * Helper: Checks if a new order of the given type can be brewed right now.
+     * <p>
+     * Capacity rule:
+     * max 2 teas brewing and max 2 coffees brewing concurrently.
+     *
+     * @param type order type ("tea" or "coffee")
+     * @return true if a barista slot is free for that order type
+     */
     private boolean canBrew(String type) {
         if (type.equalsIgnoreCase("tea")) {
             return countTeaBrewing.get() < 2;
@@ -190,41 +191,73 @@ public class Barista {
         return false;
     }
 
-    private void brewOrder(String orderItem, String type) {
+    /**
+     * Brew an order.
+     * <p>
+     * Steps:
+     * <ol>
+     * <li>Mark order as BREWING in {@code brewArea}</li>
+     * <li>Increment brewing count</li>
+     * <li>Sleep to simulate brew time</li>
+     * <li>Move order to {@code trayArea}</li>
+     * <li>Decrement brewing count</li>
+     * <li>Notify the customer (via handler reference)</li>
+     * </ol>
+     *
+     * @param ticket the order ticket (includes handler for current customer, order
+     *               string and customer ID)
+     * @param type   "tea" or "coffee"
+     */
+    private void brewOrder(OrderTicket ticket, String type) {
         try {
-            System.out.println("Barista started to brew: " + orderItem);
-            brewArea.put(orderItem, "BREWING");
+            System.out.println("Barista started to brew: " + ticket.orderStr());
+            brewArea.put(ticket.orderStr(), "BREWING");
 
-            // Increment brewing counter
             if (type.equalsIgnoreCase("tea")) {
                 countTeaBrewing.incrementAndGet();
             } else if (type.equalsIgnoreCase("coffee")) {
                 countCoffeeBrewing.incrementAndGet();
             }
 
-            // Brew time based on type
             int timeToBrew = type.equalsIgnoreCase("tea") ? 30000 : 45000;
             Thread.sleep(timeToBrew);
 
-            // Move to tray
-            brewArea.remove(orderItem);
-            trayArea.offer(orderItem);
+            brewArea.remove(ticket.orderStr());
+            trayArea.offer(ticket);
 
-            // Decrement brewing counter
             if (type.equalsIgnoreCase("tea")) {
                 countTeaBrewing.decrementAndGet();
             } else if (type.equalsIgnoreCase("coffee")) {
                 countCoffeeBrewing.decrementAndGet();
             }
 
-            System.out.println("Order ready for pickup in tray: " + orderItem);
+            System.out.println("Order ready for the pickup in tray: " + ticket.orderStr());
+
+            ticket.handler()
+                    .sendNotification("Your " + extractOrderDescription(ticket.orderStr()) + " is ready for pickup!");
 
         } catch (Exception e) {
             System.err.println("Error brewing order: " + e.getMessage());
         }
     }
 
+    /**
+     * Helper: Converts an order string into a readable description.
+     *
+     * @param orderStr full order string
+     * @return order description
+     */
+    private String extractOrderDescription(String orderStr) {
+        String orderItem = orderStr.contains(":") ? orderStr.substring(orderStr.indexOf(":") + 1) : orderStr;
+        return orderItem;
+    }
 
+    /**
+     * Gracefully shuts down the server.
+     * <p>
+     * Stops the scheduler thread and shuts down both thread pools.
+     * This is triggered by a shutdown hook.
+     */
     private void shutdown() {
         isShuttingDown = true;
         if (orderScheduler != null) {

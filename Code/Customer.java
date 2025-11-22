@@ -1,21 +1,26 @@
 package Code;
-
-import java.io.IOException;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Scanner;
 import java.util.UUID;
-
 import Code.helpers.CustomerClient;
 import Code.helpers.Order;
 import Code.helpers.prettyPrint;
 
-/*
- * Client Facing Interface, User Communicates through Customer, Customer interacts with Client to send 
- * requests over to the server.
+/**
+ * Client-facing interface for interacting with the Barista.
+ * <p>
+ * A {@code Customer} represents a single user connected to the server.
+ * This class is responsible for:
+ * <ul>
+ * <li>Collecting user input from the CLI</li>
+ * <li>Packaging the user's name, ID, and orders into a {@link Customer}
+ * object</li>
+ * <li>Using {@link CustomerClient} to communicate with the server</li>
+ * </ul>
  */
 public class Customer implements Serializable {
-    private static final long serialVersionUID = 1L; // unique in order to identify the serialized object
+    private static final long serialVersionUID = 1L;
     private String name;
     private int id;
     private ArrayList<Order> orders;
@@ -27,46 +32,38 @@ public class Customer implements Serializable {
     }
 
     public static void main(String[] args) {
-        ArrayList<Order> orders; // collect orders for this customer, send to client to send to server to process
+        ArrayList<Order> orders;
+        prettyPrint.printWelcome();
 
-        // GET ORDERS
-        System.out.println("Welcome, what do you want? ");
+        System.out.println("What do you want? ");
 
-        Scanner scanner = new Scanner(System.in); // take input from console
-        String line = scanner.nextLine(); // store input in string
-        orders = cleanOrders(line); // process input
-
-        // STREAM ORDERS TO SERVER:
+        Scanner scanner = new Scanner(System.in);
+        String line = scanner.nextLine();
+        orders = cleanOrders(line);
 
         System.out.println("What is your name? ");
         String name = scanner.nextLine();
-        // CONFIRM ORDER HERE
 
-        Customer customer = new Customer(name, UUID.randomUUID().hashCode(), orders); // construct object to be sent to
-                                                                                      // server
-        try (CustomerClient client = new CustomerClient(customer)) { // setup client, send customer
+        Customer customer = new Customer(name, UUID.randomUUID().hashCode(), orders);
+        try (CustomerClient client = new CustomerClient(customer)) {
 
-            // Problems with connection to server
             if (!client.connect()) {
                 System.err.println("Failed to connect to cafe server. Please try again later.");
                 return;
             }
             System.err.println("We have placed your order, please standby, " + customer.getName());
 
-            // Main loop, after placing order, client interacts with barista
             while (true) {
-                System.err.println("Options:" + "--|order status|-- " + "--|collect| " + "--|exit|-- ");
+                prettyPrint.printOptionsMenu();
 
-                String command = scanner.nextLine(); // store command
-
-                // tell client to send command over to server
+                String command = scanner.nextLine();
                 if (command.equalsIgnoreCase("order status")) {
                     client.getOrderStatus();
                 } else if (command.equalsIgnoreCase("collect")) {
                     client.collectOrder();
                 } else if (command.equalsIgnoreCase("exit")) {
-                    client.terminateSession(); // done
-                    break; // Exit the loop
+                    client.terminateSession();
+                    break;
                 }
             }
         } catch (Exception e) {
@@ -74,6 +71,20 @@ public class Customer implements Serializable {
         }
     }
 
+    /**
+     * Parses a text order line from customer into a list of {@link Order} objects.
+     * <p>
+     * Expected format:
+     * <ul>
+     * <li>{@code "1 tea"}</li>
+     * <li>{@code "2 coffee and 1 tea"}</li>
+     * </ul>
+     * Splits on "and", then expects each split to start with a quantity
+     * followed by drink type.
+     *
+     * @param in input string from the user
+     * @return list orders
+     */
     public static ArrayList<Order> cleanOrders(String in) {
         ArrayList<Order> orders = new ArrayList<>();
 

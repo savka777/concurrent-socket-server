@@ -15,9 +15,11 @@ import Code.helpers.CustomerHandler;
 // Server Implementation
 public class Barista {
     private final static int PORT = 8888; // server port, any client can connect that is communicating on this port
-    // thread pool that handles client connections, at most letting in 20 clients at
-    // a time into the coffee shop
-    private final ExecutorService clientHandlers = Executors.newFixedThreadPool(20);
+    // thread pool that handles client connections, at most letting in 10 clients at
+    // a time into the coffee shop, when someone leaves a thread is freed for any
+    // waiting clients
+    // uses a blocking queue, each thread, fetches next task and executes it
+    private final ExecutorService clientHandlers = Executors.newFixedThreadPool(10);
     // thread pool for barista workers, can handle up to 4 workers (2 tea + 2 coffee
     // max)
     private final ExecutorService baristaWorkers = Executors.newFixedThreadPool(4);
@@ -37,7 +39,8 @@ public class Barista {
 
     // tracking variables for cafe stats
     // volatile, because changes made in one thread, affect all other threads
-    // read by all threads, but writin only once in timer thread (which calls check stats)
+    // read by all threads, but writin only once in timer thread (which calls check
+    // stats)
     // Sufficient since only 1 thread updates these, no need for atomic objects
     private volatile int ordersInWaiting;
     private volatile int ordersInBrew;
@@ -46,15 +49,25 @@ public class Barista {
     // capacity counters for tea and coffee, read and mofified by all threads
     private final AtomicInteger countTeaBrewing = new AtomicInteger(0);
     private final AtomicInteger countCoffeeBrewing = new AtomicInteger(0);
-    
+
     // track connected clients
     private final AtomicInteger connectedClients = new AtomicInteger(0);
+
+    // track active customer IDs to detect abandoned orders
+    // When a user leaves without picking up their order, we will give it to a new
+    // client
+    private final ConcurrentHashMap<Integer, Boolean> activeCustomers = new ConcurrentHashMap<>();
+    
+    // track idle customers (customers who have collected their orders)
+    private final ConcurrentHashMap<Integer, String> idleCustomers = new ConcurrentHashMap<>();
+
 
     // shutdown flag for scheduler
     private volatile boolean isShuttingDown = false;
 
     public Barista() {
-        // Initialize the smart scheduler
+        // Initialize the smart scheduler, responsible for order retrieval, type
+        // detection, capacity check, order assignment,
         this.orderScheduler = new Thread(this::runOrderScheduler); // redirector, instance method
         this.orderScheduler.setDaemon(true); // when cafe closes we stop service
         this.orderScheduler.start();
@@ -78,7 +91,7 @@ public class Barista {
     }
 
     private void runServer() {
-        ServerSocket serverSocket = null; // passive socket to allow clients to connect
+        ServerSocket serverSocket = null; // Standard socket to allow clients to connect
         try {
             serverSocket = new ServerSocket(PORT);
             System.out.println("Cafe is Open!");
@@ -94,7 +107,9 @@ public class Barista {
                             waitingArea,
                             brewArea,
                             trayArea,
-                            connectedClients); // Pass the counter
+                            connectedClients,
+                            activeCustomers,
+                            idleCustomers); // Pass both customer trackers
 
                     connectedClients.incrementAndGet(); // Client connected
                     clientHandlers.submit(handler);
@@ -121,19 +136,19 @@ public class Barista {
 
     public void printStats() {
         checkStats();
-        
+
         // Save cursor position, move to top, print status, restore cursor
-        System.out.print("\033[s");        // Save cursor position
-        System.out.print("\033[H");        // Move to top-left
-        System.out.print("\033[K");        // Clear current line
-        
+        System.out.print("\033[s"); // Save cursor position
+        System.out.print("\033[H"); // Move to top-left
+        System.out.print("\033[K"); // Clear current line
+
         // Print compact status bar
-        System.out.printf("CAFE STATUS | Clients: %d | Waiting: %d | Brewing: %d (T:%d C:%d) | Tray: %d | Port: %d%n",
-                connectedClients.get(), ordersInWaiting, ordersInBrew, 
+        System.out.printf("CAFE STATUS | Clients: %d | Idle: %d | Waiting: %d | Brewing: %d (T:%d C:%d) | Tray: %d | Port: %d%n",
+                connectedClients.get(), idleCustomers.size(), ordersInWaiting, ordersInBrew,
                 countTeaBrewing.get(), countCoffeeBrewing.get(), orderInTray, PORT);
-        
+
         System.out.print("─".repeat(80)); // Separator line
-        System.out.print("\033[u");        // Restore cursor position
+        System.out.print("\033[u"); // Restore cursor position
     }
 
     private void runOrderScheduler() {
@@ -144,7 +159,7 @@ public class Barista {
                                                    // checking
                 String type = getOrderType(order);
 
-                // Check if we can brew this type
+                // Check if we can brew this type (checks capacity)
                 if (canBrew(type)) {
                     baristaWorkers.submit(() -> brewOrder(order, type));
                 } else {
@@ -160,7 +175,9 @@ public class Barista {
     }
 
     private String getOrderType(String order) {
-        String[] parts = order.split(" ");
+        // Extract order part after customerId (format: "customerId:orderItem")
+        String orderItem = order.contains(":") ? order.substring(order.indexOf(":") + 1) : order;
+        String[] parts = orderItem.split(" ");
         return parts.length > 1 ? parts[1].toLowerCase() : "";
     }
 
@@ -201,10 +218,12 @@ public class Barista {
             }
 
             System.out.println("Order ready for pickup in tray: " + orderItem);
+
         } catch (Exception e) {
             System.err.println("Error brewing order: " + e.getMessage());
         }
     }
+
 
     private void shutdown() {
         isShuttingDown = true;

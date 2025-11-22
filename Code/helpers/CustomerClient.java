@@ -64,6 +64,7 @@ public class CustomerClient implements AutoCloseable {
             writer.flush();
 
             String response = reader.nextLine();
+
             if (response.equalsIgnoreCase("ORDER_STATUS_CONFIRMED")) {
                 System.out.println("Server got the ORDER STATUS REQUEST, recieving status now....");
                 String status = reader.nextLine(); // get order message
@@ -77,29 +78,35 @@ public class CustomerClient implements AutoCloseable {
 
     }
 
-    public void collectOrder() {
+    public boolean collectOrder() {
         try {
             writer.println("COLLECT_ORDER");
             writer.flush();
 
             String response = reader.nextLine();
+
             if (response.equalsIgnoreCase("COLLECT_ORDER_READY")) {
                 System.out.println("Server got the COLLECT ORDER REQUEST");
                 System.out.println("Thank you and have a nice day:)");
-                terminateSession();
+                return true; // Indicate successful collection
             } else if (response.equalsIgnoreCase("COLLECT_ORDER_NOT_READY")) {
                 System.out.println("ORDER IS NOT READY FOR COLLECTION");
+                return false; // Indicate order not ready
+            } else if (response.equalsIgnoreCase("NO_ORDER_FOUND")) {
+                System.out.println("No order found for " + customer.getName() + " - customer is idle");
+                return false; // Indicate no order to collect
             }
         } catch (Exception e) {
             System.err.println(e.getMessage());
         }
+        return false; // default to not ready
     }
 
     public void terminateSession() {
         try {
             writer.println("TERMINATE");
             writer.flush();
-            
+
             // Confimation on our end
             if (reader.hasNextLine()) {
                 String response = reader.nextLine().trim();
@@ -118,6 +125,7 @@ public class CustomerClient implements AutoCloseable {
             close();
         }
     }
+
 
     @Override
     public void close() {

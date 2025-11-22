@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Scanner;
+import java.util.UUID;
 
 import Code.helpers.CustomerClient;
 import Code.helpers.Order;
@@ -15,7 +16,7 @@ import Code.helpers.prettyPrint;
  */
 public class Customer implements Serializable {
     private static final long serialVersionUID = 1L; // unique in order to identify the serialized object
-    private String name; 
+    private String name;
     private int id;
     private ArrayList<Order> orders;
 
@@ -30,26 +31,27 @@ public class Customer implements Serializable {
 
         // GET ORDERS
         System.out.println("Welcome, what do you want? ");
-        
+
         Scanner scanner = new Scanner(System.in); // take input from console
         String line = scanner.nextLine(); // store input in string
         orders = cleanOrders(line); // process input
 
         // STREAM ORDERS TO SERVER:
-  
+
         System.out.println("What is your name? ");
         String name = scanner.nextLine();
-        // CONFIRM ORDER HERE        
+        // CONFIRM ORDER HERE
 
-        Customer customer = new Customer(name, 1, orders); // construct object to be sent to server
-        try (CustomerClient client = new CustomerClient(customer)) { // setup client, send customer 
+        Customer customer = new Customer(name, UUID.randomUUID().hashCode(), orders); // construct object to be sent to
+                                                                                      // server
+        try (CustomerClient client = new CustomerClient(customer)) { // setup client, send customer
 
             // Problems with connection to server
             if (!client.connect()) {
                 System.err.println("Failed to connect to cafe server. Please try again later.");
                 return;
             }
-            System.err.println("We have placed your order, please standby, " + customer.getName()); 
+            System.err.println("We have placed your order, please standby, " + customer.getName());
 
             // Main loop, after placing order, client interacts with barista
             while (true) {
@@ -61,7 +63,7 @@ public class Customer implements Serializable {
                 if (command.equalsIgnoreCase("order status")) {
                     client.getOrderStatus();
                 } else if (command.equalsIgnoreCase("collect")) {
-                    client.collectOrder(); // to do
+                    client.collectOrder();
                 } else if (command.equalsIgnoreCase("exit")) {
                     client.terminateSession(); // done
                     break; // Exit the loop
